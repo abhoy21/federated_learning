@@ -37,32 +37,56 @@ The `Regressor` class implements a linear regression model trained using Mean Sq
 - Updates weights (`w`) and bias (`b`) using gradient descent.
 - Tracks training progress with MSE values.
 
-#### Code Implementation:
+#### Code Implementation of model training function:
 
 ```python
-class Regressor:
-    def __init__(self, w, b, batch_size, learning_rate, num_epochs):
-        self.learning_rate = learning_rate
-        self.num_epochs = num_epochs
-        self.batch_size = batch_size
-        self.w = w
-        self.b = b
+def train(self, X, y):
 
-    def train(self, X, y):
+        self.mse_values = []
+        self.epoch_values = []
+        self.batch_msevalues = []
+        self.batch_epoch_values = []
+
         for epoch in range(self.num_epochs):
-            y_pred = self.predict(X)
-            error = y - y_pred
 
-            # Compute gradients
-            dw = -(2 / len(X)) * np.dot(X.T, error)
-            db = -(2 / len(X)) * np.sum(error)
+            indices = np.random.permutation(len(X))
+            X_shuffled, y_shuffled = X[indices], y[indices]
 
-            # Update parameters
-            self.w -= self.learning_rate * dw
-            self.b -= self.learning_rate * db
+            num_batches = len(X) // self.batch_size
+            if len(X) % self.batch_size != 0:
+                num_batches += 1
 
-    def predict(self, X):
-        return np.dot(X, self.w) + self.b
+            random_batch_index = random.randint(0, num_batches - 1)
+
+            start = random_batch_index * self.batch_size
+            end = start + self.batch_size
+            X_batch = X_shuffled[start:end]
+            y_batch = y_shuffled[start:end]
+
+            y_pred = self.predict(X_batch)
+            error = y_batch - y_pred
+
+            mse = np.mean(error ** 2)
+            self.batch_msevalues.append(mse)
+            self.batch_epoch_values.append(epoch)
+
+            dw = -(2 / self.batch_size) * np.dot(X_batch.T, error)
+            db = -(2 / self.batch_size) * np.sum(error)
+
+            self.w = self.w - self.learning_rate * dw
+            self.b = self.b - self.learning_rate * db
+
+            self.mse_values.append(mse)
+            self.epoch_values.append(epoch)
+
+        return (
+            self.w,
+            self.b,
+            self.mse_values,
+            self.epoch_values,
+            self.batch_epoch_values,
+            self.batch_msevalues,
+        )
 ```
 
 ### 3. Federated Learning Framework
@@ -88,23 +112,58 @@ class Federated:
         self.X = X
         self.y = y
 
-    def fed_learn(self, X_test, y_test):
-        client_data, client_targets = np.array_split(self.X, self.n_clients), np.array_split(self.y, self.n_clients)
+    def fed_learn(self, X_test, y_test):  # Added X_test, y_test parameters which were missing
+        client_data, client_targets = self.client_data_split()
+        self.mse_list = []
+        self.cycles_list = []
+        self.client_contributions = []  # Track client contributions across cycles
 
-        for cycle in range(self.cycles):
-            client_weights, client_biases = [], []
+        for cycle_idx in range(self.cycles):
+            cycle_contributions = []  # Track contributions for this cycle
 
+            # Reset local model to global model parameters
+            self.local_model.w = self.global_model.w.copy()  # Use copy() to avoid reference issues
+            self.local_model.b = self.global_model.b
+
+            client_weights = []  # Store each client's weights
+            client_biases = []   # Store each client's biases
+
+            # First, train all clients and evaluate their contributions
             for client_idx in range(self.n_clients):
+                # Train the local model on client data
                 self.local_model.train(client_data[client_idx], client_targets[client_idx])
+
+                # Evaluate this client's contribution
+                contribution = self.evaluate_client_contribution(
+                    self.local_model, client_data[client_idx], client_targets[client_idx])
+                cycle_contributions.append(contribution)
+
+                # Store trained weights and biases
                 client_weights.append(self.local_model.w.copy())
                 client_biases.append(self.local_model.b)
 
-            # Aggregate updates (average model parameters)
+                # Reset local model for next client
+                if client_idx < self.n_clients - 1:
+                    self.local_model.w = self.global_model.w.copy()
+                    self.local_model.b = self.global_model.b
+
+            # Store all client contributions for this cycle
+            self.client_contributions.append(cycle_contributions)
+
+            # Now aggregate all client models to update global model
+            # Simple average aggregation (can be modified to use contribution scores)
             self.global_model.w = np.mean(client_weights, axis=0)
             self.global_model.b = np.mean(client_biases)
 
+            # Evaluate global model
             mse_global = self.global_model.test(X_test, y_test)
-            print(f"Cycle {cycle+1}, Global MSE: {mse_global:.4f}")
+            self.mse_list.append(mse_global)
+            self.cycles_list.append(cycle_idx)
+
+            print(f"Cycle {cycle_idx+1}/{self.cycles}, Global MSE: {mse_global:.4f}")
+            print(f"Client contributions: {[f'{c:.4f}' for c in cycle_contributions]}")
+
+        return self.global_model, self.mse_list, self.cycles_list, self.client_contributions
 ```
 
 ### 4. Model Training and Evaluation
